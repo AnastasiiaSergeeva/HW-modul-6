@@ -139,14 +139,32 @@ let state = {
     color: '#6b4226',
     colorName: 'Каштановый',
     skin: '#f2c9a5',
-    shape: null
+    shape: null,
+    mode: 'avatar', // 'avatar' | 'photo'
+    fit: { x: 0, y: 0, s: 1, r: 0 } // подгонка причёски под фото
 };
+
+// Фото храним отдельно от state: dataURL слишком большой для localStorage
+let photoData = null;
 
 // ===== Элементы =====
 
 const el = {
+    svg: document.getElementById('avatar'),
     hairBack: document.getElementById('hair-back'),
     hairFront: document.getElementById('hair-front'),
+    avatarBody: document.getElementById('avatar-body'),
+    userPhoto: document.getElementById('user-photo'),
+    modeAvatar: document.getElementById('mode-avatar'),
+    modePhoto: document.getElementById('mode-photo'),
+    photoControls: document.getElementById('photo-controls'),
+    fitControls: document.getElementById('fit-controls'),
+    photoInput: document.getElementById('photo-input'),
+    fitScale: document.getElementById('fit-scale'),
+    fitRotate: document.getElementById('fit-rotate'),
+    btnAutofit: document.getElementById('btn-autofit'),
+    btnDownload: document.getElementById('btn-download'),
+    skinGroup: document.getElementById('skin-group'),
     hairstyles: document.getElementById('hairstyles'),
     colors: document.getElementById('colors'),
     skins: document.getElementById('skins'),
@@ -168,6 +186,32 @@ function renderAvatar() {
     el.hairBack.setAttribute('fill', shade(state.color, -18));
     el.hairFront.setAttribute('fill', state.color);
     document.documentElement.style.setProperty('--skin', state.skin);
+
+    const photoMode = state.mode === 'photo';
+    el.avatarBody.style.display = photoMode && photoData ? 'none' : '';
+    el.userPhoto.style.display = photoMode && photoData ? '' : 'none';
+    if (photoData) el.userPhoto.setAttribute('href', photoData);
+
+    if (photoMode && photoData) {
+        // Двигаем/масштабируем/вращаем причёску вокруг центра головы аватара (150, 165)
+        const { x, y, s, r } = state.fit;
+        const t = `translate(${x} ${y}) translate(150 165) rotate(${r}) scale(${s}) translate(-150 -165)`;
+        el.hairBack.setAttribute('transform', t);
+        el.hairFront.setAttribute('transform', t);
+    } else {
+        el.hairBack.removeAttribute('transform');
+        el.hairFront.removeAttribute('transform');
+    }
+
+    // Панели и подсказки под текущий режим
+    el.modeAvatar.classList.toggle('active', !photoMode);
+    el.modePhoto.classList.toggle('active', photoMode);
+    el.photoControls.hidden = !photoMode;
+    el.fitControls.hidden = !photoMode || !photoData;
+    el.skinGroup.style.display = photoMode ? 'none' : '';
+    el.svg.classList.toggle('draggable', photoMode && !!photoData);
+    el.fitScale.value = state.fit.s;
+    el.fitRotate.value = state.fit.r;
 
     el.currentChoice.textContent = `${style.name} · ${state.colorName}`;
 }
@@ -332,6 +376,141 @@ el.customColor.addEventListener('input', e => {
     update();
 });
 
+// ===== Режим «Моё фото» =====
+
+el.modeAvatar.addEventListener('click', () => {
+    state.mode = 'avatar';
+    update();
+});
+
+el.modePhoto.addEventListener('click', () => {
+    state.mode = 'photo';
+    update();
+});
+
+el.photoInput.addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+        photoData = reader.result;
+        state.mode = 'photo';
+        state.fit = { x: 0, y: 0, s: 1, r: 0 };
+        update();
+        autoFit(); // пробуем найти лицо автоматически, если браузер умеет
+    };
+    reader.readAsDataURL(file);
+});
+
+el.fitScale.addEventListener('input', e => {
+    state.fit.s = parseFloat(e.target.value);
+    update();
+});
+
+el.fitRotate.addEventListener('input', e => {
+    state.fit.r = parseFloat(e.target.value);
+    update();
+});
+
+// Перетаскивание причёски по фото (мышь и палец)
+let drag = null;
+
+el.svg.addEventListener('pointerdown', e => {
+    if (state.mode !== 'photo' || !photoData) return;
+    e.preventDefault();
+    el.svg.setPointerCapture(e.pointerId);
+    el.svg.classList.add('dragging');
+    drag = { px: e.clientX, py: e.clientY, x: state.fit.x, y: state.fit.y };
+});
+
+el.svg.addEventListener('pointermove', e => {
+    if (!drag) return;
+    // Переводим пиксели экрана в координаты viewBox (300 единиц по ширине)
+    const k = 300 / el.svg.getBoundingClientRect().width;
+    state.fit.x = drag.x + (e.clientX - drag.px) * k;
+    state.fit.y = drag.y + (e.clientY - drag.py) * k;
+    renderAvatar();
+});
+
+['pointerup', 'pointercancel'].forEach(ev => el.svg.addEventListener(ev, () => {
+    if (!drag) return;
+    drag = null;
+    el.svg.classList.remove('dragging');
+    saveState();
+}));
+
+// Колесо мыши — масштаб причёски
+el.svg.addEventListener('wheel', e => {
+    if (state.mode !== 'photo' || !photoData) return;
+    e.preventDefault();
+    const next = state.fit.s * (e.deltaY < 0 ? 1.05 : 0.95);
+    state.fit.s = Math.min(2.5, Math.max(0.35, next));
+    renderAvatar();
+    saveState();
+}, { passive: false });
+
+// Авто-подгонка: используем встроенный в браузер FaceDetector, если он есть
+async function autoFit(showAlert) {
+    if (!('FaceDetector' in window)) {
+        if (showAlert) alert('Ваш браузер не поддерживает автоопределение лица — подгоните причёску вручную.');
+        return;
+    }
+    try {
+        const img = new Image();
+        img.src = photoData;
+        await img.decode();
+
+        const faces = await new FaceDetector().detect(img);
+        if (!faces.length) {
+            if (showAlert) alert('Лицо не найдено — подгоните причёску вручную.');
+            return;
+        }
+        const box = faces[0].boundingBox;
+
+        // Фото вписано в viewBox 300x340 в режиме «cover» — пересчитываем рамку лица
+        const k = Math.max(300 / img.naturalWidth, 340 / img.naturalHeight);
+        const ox = (img.naturalWidth * k - 300) / 2;
+        const oy = (img.naturalHeight * k - 340) / 2;
+        const fx = box.x * k - ox + (box.width * k) / 2;
+        const fy = box.y * k - oy + (box.height * k) / 2;
+
+        state.fit.s = Math.min(2.5, Math.max(0.35, (box.width * k) / 115));
+        state.fit.x = fx - 150;
+        state.fit.y = fy - 165;
+        state.fit.r = 0;
+        update();
+    } catch {
+        if (showAlert) alert('Не получилось определить лицо — подгоните причёску вручную.');
+    }
+}
+
+el.btnAutofit.addEventListener('click', () => autoFit(true));
+
+// Скачать результат как PNG
+el.btnDownload.addEventListener('click', () => {
+    const clone = el.svg.cloneNode(true);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clone.setAttribute('width', 600);
+    clone.setAttribute('height', 680);
+    // Подставляем реальный цвет кожи вместо CSS-переменной
+    clone.querySelectorAll('[fill="var(--skin)"]').forEach(n => n.setAttribute('fill', state.skin));
+
+    const url = URL.createObjectURL(new Blob([clone.outerHTML], { type: 'image/svg+xml' }));
+    const img = new Image();
+    img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 600;
+        canvas.height = 680;
+        canvas.getContext('2d').drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+        const a = document.createElement('a');
+        a.href = canvas.toDataURL('image/png');
+        a.download = 'moy-obraz.png';
+        a.click();
+    };
+    img.src = url;
+});
+
 // ===== Сохранение состояния =====
 
 function saveState() {
@@ -343,6 +522,8 @@ function loadState() {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
         if (saved && HAIRSTYLES.some(s => s.id === saved.style)) {
             state = { ...state, ...saved };
+            state.fit = saved.fit || { x: 0, y: 0, s: 1, r: 0 };
+            state.mode = 'avatar'; // фото не переживает перезагрузку, начинаем с аватара
         }
     } catch {
         // повреждённые данные — используем значения по умолчанию

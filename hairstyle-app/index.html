@@ -9,40 +9,69 @@
 <body>
     <header class="header">
         <h1>💇‍♀️ Виртуальный стилист</h1>
-        <p>Подберите причёску и цвет волос, посмотрите результат на аватаре</p>
+        <p>Подберите причёску и цвет волос — на аватаре или на собственном фото</p>
     </header>
 
     <main class="layout">
-        <!-- Превью аватара -->
+        <!-- Превью -->
         <section class="preview-card">
-            <h2>Превью</h2>
+            <div class="mode-switch">
+                <button id="mode-avatar" class="chip" type="button">🎨 Аватар</button>
+                <button id="mode-photo" class="chip" type="button">📷 Моё фото</button>
+            </div>
+
             <div class="avatar-wrap">
-                <svg id="avatar" viewBox="0 0 300 340" aria-label="Аватар с выбранной причёской">
+                <svg id="avatar" viewBox="0 0 300 340" aria-label="Превью с выбранной причёской">
+                    <!-- Фото пользователя (режим «Моё фото») -->
+                    <image id="user-photo" x="0" y="0" width="300" height="340"
+                           preserveAspectRatio="xMidYMid slice" style="display:none"></image>
                     <!-- Слой волос сзади (заполняется скриптом) -->
                     <g id="hair-back"></g>
-                    <!-- Шея и плечи -->
-                    <path d="M128 240 h44 v30 q40 8 52 40 h-148 q12-32 52-40 z" fill="var(--skin)"/>
-                    <path d="M98 310 q52-22 104 0 v30 h-104 z" fill="#7c8ce0"/>
-                    <!-- Голова -->
-                    <ellipse cx="150" cy="165" rx="62" ry="75" fill="var(--skin)"/>
-                    <!-- Уши -->
-                    <ellipse cx="88" cy="175" rx="10" ry="16" fill="var(--skin)"/>
-                    <ellipse cx="212" cy="175" rx="10" ry="16" fill="var(--skin)"/>
-                    <!-- Лицо -->
-                    <g id="face">
-                        <ellipse cx="127" cy="160" rx="7" ry="9" fill="#3b2f2f"/>
-                        <ellipse cx="173" cy="160" rx="7" ry="9" fill="#3b2f2f"/>
-                        <path d="M120 143 q7-7 15-3" stroke="#3b2f2f" stroke-width="3" fill="none" stroke-linecap="round"/>
-                        <path d="M165 140 q8-4 15 3" stroke="#3b2f2f" stroke-width="3" fill="none" stroke-linecap="round"/>
-                        <path d="M147 175 q3 8 -2 12 q3 3 8 1" stroke="#c98e6d" stroke-width="2.5" fill="none" stroke-linecap="round"/>
-                        <path d="M133 210 q17 12 34 0" stroke="#b3556a" stroke-width="5" fill="none" stroke-linecap="round"/>
-                        <ellipse cx="113" cy="192" rx="9" ry="5" fill="#e8a0a0" opacity="0.45"/>
-                        <ellipse cx="187" cy="192" rx="9" ry="5" fill="#e8a0a0" opacity="0.45"/>
+                    <!-- Нарисованный аватар -->
+                    <g id="avatar-body">
+                        <path d="M128 240 h44 v30 q40 8 52 40 h-148 q12-32 52-40 z" fill="var(--skin)"/>
+                        <path d="M98 310 q52-22 104 0 v30 h-104 z" fill="#7c8ce0"/>
+                        <ellipse cx="150" cy="165" rx="62" ry="75" fill="var(--skin)"/>
+                        <ellipse cx="88" cy="175" rx="10" ry="16" fill="var(--skin)"/>
+                        <ellipse cx="212" cy="175" rx="10" ry="16" fill="var(--skin)"/>
+                        <g id="face">
+                            <ellipse cx="127" cy="160" rx="7" ry="9" fill="#3b2f2f"/>
+                            <ellipse cx="173" cy="160" rx="7" ry="9" fill="#3b2f2f"/>
+                            <path d="M120 143 q7-7 15-3" stroke="#3b2f2f" stroke-width="3" fill="none" stroke-linecap="round"/>
+                            <path d="M165 140 q8-4 15 3" stroke="#3b2f2f" stroke-width="3" fill="none" stroke-linecap="round"/>
+                            <path d="M147 175 q3 8 -2 12 q3 3 8 1" stroke="#c98e6d" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+                            <path d="M133 210 q17 12 34 0" stroke="#b3556a" stroke-width="5" fill="none" stroke-linecap="round"/>
+                            <ellipse cx="113" cy="192" rx="9" ry="5" fill="#e8a0a0" opacity="0.45"/>
+                            <ellipse cx="187" cy="192" rx="9" ry="5" fill="#e8a0a0" opacity="0.45"/>
+                        </g>
                     </g>
                     <!-- Слой волос спереди (заполняется скриптом) -->
                     <g id="hair-front"></g>
                 </svg>
             </div>
+
+            <!-- Управление фото -->
+            <div id="photo-controls" class="photo-controls" hidden>
+                <label class="upload-btn">
+                    📁 Загрузить фото
+                    <input type="file" id="photo-input" accept="image/*" hidden>
+                </label>
+                <p class="photo-hint">Фото обрабатывается только в вашем браузере и никуда не отправляется.</p>
+                <div id="fit-controls" class="fit-controls" hidden>
+                    <p class="photo-hint">Перетаскивайте причёску мышью или пальцем, подгоняйте ползунками:</p>
+                    <label>Размер
+                        <input type="range" id="fit-scale" min="0.35" max="2.5" step="0.01" value="1">
+                    </label>
+                    <label>Наклон
+                        <input type="range" id="fit-rotate" min="-45" max="45" step="1" value="0">
+                    </label>
+                    <div class="fit-buttons">
+                        <button id="btn-autofit" class="btn" type="button">🪄 Авто-подгонка</button>
+                        <button id="btn-download" class="btn" type="button">⬇️ Скачать PNG</button>
+                    </div>
+                </div>
+            </div>
+
             <div class="preview-info">
                 <p id="current-choice">Выберите причёску и цвет</p>
             </div>
@@ -74,7 +103,7 @@
                 </label>
             </div>
 
-            <div class="control-group">
+            <div class="control-group" id="skin-group">
                 <h2>Тон кожи</h2>
                 <div id="skins" class="swatch-row"></div>
             </div>
