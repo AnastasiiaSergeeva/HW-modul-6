@@ -97,6 +97,41 @@ body {
 .fit-controls input[type="range"] { flex: 1; accent-color: var(--accent); }
 .fit-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 
+.analysis {
+    margin-top: 10px;
+    padding: 10px 12px;
+    background: var(--accent-soft);
+    border-radius: 10px;
+    font-size: 0.85rem;
+    line-height: 1.45;
+}
+
+.ai-box { margin-top: 12px; }
+.ai-box summary {
+    cursor: pointer;
+    font-size: 0.88rem;
+    color: var(--accent);
+}
+.ai-box input {
+    width: 100%;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--ink);
+    font-size: 0.85rem;
+}
+
+.swatch { position: relative; }
+.swatch.recommended::after {
+    content: "✨";
+    position: absolute;
+    top: -7px;
+    right: -5px;
+    font-size: 0.7rem;
+}
+
 .preview-info { margin: 12px 0; min-height: 24px; }
 #current-choice { color: var(--muted); font-size: 0.95rem; }
 

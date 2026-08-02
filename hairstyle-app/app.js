@@ -332,6 +332,9 @@ let state = {
 
 // Фото храним отдельно от state: dataURL слишком большой для localStorage
 let photoData = null;
+let photoOriginal = null;   // оригинал до ИИ-генерации
+let hideOverlay = false;    // после ИИ-генерации причёска уже «в фото», слой SVG прячем
+let recColors = [];         // цвета, рекомендованные по цветотипу
 
 // ===== Элементы =====
 
@@ -351,6 +354,11 @@ const el = {
     fitRotate: document.getElementById('fit-rotate'),
     btnAutofit: document.getElementById('btn-autofit'),
     btnDownload: document.getElementById('btn-download'),
+    analysis: document.getElementById('analysis'),
+    aiKey: document.getElementById('ai-key'),
+    btnAi: document.getElementById('btn-ai'),
+    btnAiUndo: document.getElementById('btn-ai-undo'),
+    aiStatus: document.getElementById('ai-status'),
     skinGroup: document.getElementById('skin-group'),
     hairstyles: document.getElementById('hairstyles'),
     colors: document.getElementById('colors'),
@@ -403,11 +411,17 @@ function renderAvatar() {
 
     // На фото нет нарисованной головы, прикрывающей задний слой волос,
     // поэтому вырезаем в нём окно под лицо маской
-    const back = photoMode && photoData
-        ? HOLE_MASK + '<g mask="url(#mh%ID%)">' + style.back + '</g>'
-        : style.back;
-    el.hairBack.innerHTML = instHair(HAIR_DEFS + back, state.color, 'av');
-    el.hairFront.innerHTML = instHair(style.front, state.color, 'av');
+    if (photoMode && photoData && hideOverlay) {
+        // после ИИ-генерации причёска уже нарисована в самом фото
+        el.hairBack.innerHTML = '';
+        el.hairFront.innerHTML = '';
+    } else {
+        const back = photoMode && photoData
+            ? HOLE_MASK + '<g mask="url(#mh%ID%)">' + style.back + '</g>'
+            : style.back;
+        el.hairBack.innerHTML = instHair(HAIR_DEFS + back, state.color, 'av');
+        el.hairFront.innerHTML = instHair(style.front, state.color, 'av');
+    }
     document.documentElement.style.setProperty('--skin', state.skin);
     el.avatarBody.style.display = photoMode && photoData ? 'none' : '';
     el.userPhoto.style.display = photoMode && photoData ? '' : 'none';
@@ -464,6 +478,7 @@ function renderHairstyles() {
         card.innerHTML = thumbSvg(style, state.color) + `<span>${style.name}</span>`;
         card.addEventListener('click', () => {
             state.style = style.id;
+            hideOverlay = false;
             update();
         });
         el.hairstyles.appendChild(card);
@@ -479,9 +494,11 @@ function renderColors() {
         sw.style.background = color.hex;
         sw.title = color.name;
         if (color.hex === state.color) sw.classList.add('active');
+        if (recColors.includes(color.id)) sw.classList.add('recommended');
         sw.addEventListener('click', () => {
             state.color = color.hex;
             state.colorName = color.name;
+            hideOverlay = false;
             update();
         });
         el.colors.appendChild(sw);
@@ -610,10 +627,16 @@ el.photoInput.addEventListener('change', e => {
     const reader = new FileReader();
     reader.onload = () => {
         photoData = reader.result;
+        photoOriginal = null;
+        hideOverlay = false;
+        recColors = [];
+        el.analysis.hidden = true;
+        el.btnAiUndo.hidden = true;
+        el.aiStatus.textContent = '';
         state.mode = 'photo';
         state.fit = { x: 0, y: 0, s: 1, r: 0, w: 1 };
         update();
-        autoFit(); // сразу ищем лицо и сажаем причёску по нему
+        autoFit(); // сразу ищем лицо, форму и цветотип, сажаем причёску
     };
     reader.readAsDataURL(file);
 });
@@ -718,6 +741,14 @@ async function autoFit(showAlert) {
         }
 
         const [row, col, size] = dets[0];
+
+        // ИИ-анализ: форма лица и цветотип по пикселям найденного лица
+        try {
+            runAnalysis(rgba, W, H, row, col, size);
+        } catch {
+            el.analysis.hidden = true;
+        }
+
         // Обратно в пиксели оригинала, затем в координаты viewBox (фото вписано в 300×340 как cover)
         const k = Math.max(300 / img.naturalWidth, 340 / img.naturalHeight);
         const ox = (img.naturalWidth * k - 300) / 2;
@@ -741,6 +772,195 @@ async function autoFit(showAlert) {
 }
 
 el.btnAutofit.addEventListener('click', () => autoFit(true));
+
+// ===== ИИ-анализ лица: форма и цветотип (целиком в браузере) =====
+
+function isSkin(r, g, b) {
+    // Классические пороги кожи в YCbCr
+    const y = 0.299 * r + 0.587 * g + 0.114 * b;
+    const cb = 128 - 0.169 * r - 0.331 * g + 0.5 * b;
+    const cr = 128 + 0.5 * r - 0.419 * g - 0.081 * b;
+    return y > 40 && cb > 80 && cb < 135 && cr > 133 && cr < 180;
+}
+
+// Средний цвет пикселей в прямоугольнике (опционально только «кожных»)
+function avgColor(rgba, W, H, x0, y0, x1, y1, skinOnly) {
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let y = Math.max(0, y0 | 0); y < Math.min(H, y1 | 0); y++) {
+        for (let x = Math.max(0, x0 | 0); x < Math.min(W, x1 | 0); x++) {
+            const i = 4 * (y * W + x);
+            if (skinOnly && !isSkin(rgba[i], rgba[i + 1], rgba[i + 2])) continue;
+            r += rgba[i]; g += rgba[i + 1]; b += rgba[i + 2]; n++;
+        }
+    }
+    return n ? { r: r / n, g: g / n, b: b / n, n } : null;
+}
+
+// Ширина лица (число «кожных» пикселей) на горизонтали y
+function skinWidth(rgba, W, H, cx, y, half) {
+    if (y < 0 || y >= H) return 0;
+    let n = 0;
+    for (let x = Math.max(0, cx - half | 0); x < Math.min(W, cx + half | 0); x++) {
+        const i = 4 * ((y | 0) * W + x);
+        if (isSkin(rgba[i], rgba[i + 1], rgba[i + 2])) n++;
+    }
+    return n;
+}
+
+const SEASONS = {
+    spring: { name: 'Весна', desc: 'тёплый и светлый', colors: ['blond', 'rusy', 'ginger'] },
+    summer: { name: 'Лето', desc: 'холодный и мягкий', colors: ['ash', 'rusy', 'blond'] },
+    autumn: { name: 'Осень', desc: 'тёплый и глубокий', colors: ['brown', 'ginger', 'red'] },
+    winter: { name: 'Зима', desc: 'холодный и контрастный', colors: ['black', 'brown', 'red'] }
+};
+
+function runAnalysis(rgba, W, H, row, col, size) {
+    const s = size, cx = col, cy = row;
+
+    // --- Форма лица: ширина кожи на трёх уровнях + длина ---
+    const half = s * 0.7;
+    const wForehead = skinWidth(rgba, W, H, cx, cy - 0.28 * s, half);
+    const wCheek = Math.max(1, skinWidth(rgba, W, H, cx, cy - 0.02 * s, half));
+    const wJaw = skinWidth(rgba, W, H, cx, cy + 0.30 * s, half);
+
+    // Длина лица: протяжённость кожи по вертикали через центр
+    let top = cy, bottom = cy, miss = 0;
+    for (let y = cy | 0; y > cy - s; y--) {
+        const i = 4 * (y * W + (cx | 0));
+        if (y < 0) break;
+        if (isSkin(rgba[i], rgba[i + 1], rgba[i + 2])) { top = y; miss = 0; } else if (++miss > s * 0.06) break;
+    }
+    miss = 0;
+    for (let y = cy | 0; y < cy + s; y++) {
+        const i = 4 * (y * W + (cx | 0));
+        if (y >= H) break;
+        if (isSkin(rgba[i], rgba[i + 1], rgba[i + 2])) { bottom = y; miss = 0; } else if (++miss > s * 0.06) break;
+    }
+    const len = Math.max(1, bottom - top);
+
+    const ratio = len / wCheek;
+    const jawK = wJaw / wCheek;
+    const foreK = wForehead / wCheek;
+
+    let shapeId;
+    if (ratio > 1.5) shapeId = 'oblong';
+    else if (foreK > 0.9 && jawK < 0.72) shapeId = 'heart';
+    else if (jawK > 0.9 && ratio < 1.32) shapeId = 'square';
+    else if (ratio < 1.22) shapeId = 'round';
+    else shapeId = 'oval';
+
+    // --- Цветотип: кожа (щёки), волосы (над лицом), контраст ---
+    const skin = avgColor(rgba, W, H, cx - 0.3 * s, cy, cx + 0.3 * s, cy + 0.18 * s, true)
+        || avgColor(rgba, W, H, cx - 0.2 * s, cy - 0.1 * s, cx + 0.2 * s, cy + 0.2 * s, false);
+    const hair = avgColor(rgba, W, H, cx - 0.3 * s, cy - 0.72 * s, cx + 0.3 * s, cy - 0.55 * s, false);
+
+    let season = null;
+    if (skin && hair) {
+        const lum = c => 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+        const warm = (skin.r - skin.b) > 52;           // желтоватый подтон
+        const lightSkin = lum(skin) > 150;
+        const contrast = Math.abs(lum(skin) - lum(hair));
+        season = warm
+            ? (lightSkin && contrast < 95 ? SEASONS.spring : SEASONS.autumn)
+            : (contrast > 95 || lum(hair) < 60 ? SEASONS.winter : SEASONS.summer);
+    }
+
+    // --- Применяем результат ---
+    state.shape = shapeId;
+    recColors = season ? season.colors : [];
+    const shapeName = FACE_SHAPES.find(f => f.id === shapeId).name;
+    const colorNames = recColors
+        .map(id => (COLORS.find(c => c.id === id) || {}).name)
+        .filter(Boolean).join(', ');
+    el.analysis.hidden = false;
+    el.analysis.innerHTML =
+        `🧠 <b>ИИ-анализ:</b> форма лица — <b>${shapeName}</b>` +
+        (season ? `, цветотип — <b>${season.name}</b> (${season.desc}).<br>` +
+                  `Подходящие причёски отмечены ✨, рекомендуемые цвета: ${colorNames}.`
+                : '. Подходящие причёски отмечены ✨.');
+}
+
+// ===== ИИ-фотореализм через Google Gemini (по ключу пользователя) =====
+
+const STYLE_EN = {
+    pixie: 'a short pixie cut',
+    bob: 'a chin-length bob haircut',
+    long: 'long straight hair',
+    wavy: 'long layered wavy hair',
+    curly: 'voluminous curly hair',
+    ponytail: 'a high ponytail',
+    bun: 'a top bun',
+    buzz: 'a buzz cut'
+};
+
+const COLOR_EN = {
+    blond: 'golden blonde', rusy: 'light ash brown', brown: 'chestnut brown',
+    black: 'black', ginger: 'copper red', red: 'burgundy red',
+    ash: 'ash gray', pink: 'pastel pink', violet: 'violet purple', blue: 'dark blue'
+};
+
+el.aiKey.value = localStorage.getItem('hairstyle-app-ai-key') || '';
+
+el.btnAi.addEventListener('click', async () => {
+    if (!photoData) { el.aiStatus.textContent = 'Сначала загрузите фото.'; return; }
+    const key = el.aiKey.value.trim();
+    if (!key) { el.aiStatus.textContent = 'Вставьте API-ключ с aistudio.google.com.'; return; }
+    localStorage.setItem('hairstyle-app-ai-key', key);
+
+    const colorId = (COLORS.find(c => c.hex === state.color) || {}).id;
+    const colorEn = COLOR_EN[colorId] || ('hex ' + state.color);
+    const prompt = `Edit this photo: change the person's hairstyle to ${STYLE_EN[state.style]} in ${colorEn} color. ` +
+        'Keep the face, skin tone, expression, lighting and background completely unchanged. ' +
+        'Photorealistic result with a natural hairline.';
+
+    const src = photoOriginal || photoData;
+    const mime = (src.match(/^data:([^;]+);/) || [])[1] || 'image/jpeg';
+    const b64 = src.split(',')[1];
+
+    el.btnAi.disabled = true;
+    el.aiStatus.textContent = 'Генерация… обычно 10–30 секунд.';
+    try {
+        const resp = await fetch(
+            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=' +
+            encodeURIComponent(key),
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mime, data: b64 } }] }]
+                })
+            }
+        );
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error.message || 'ошибка API');
+        const parts = ((data.candidates || [])[0] || {}).content?.parts || [];
+        const imgPart = parts.find(p => p.inlineData || p.inline_data);
+        if (!imgPart) throw new Error('модель не вернула изображение — попробуйте ещё раз');
+        const out = imgPart.inlineData || imgPart.inline_data;
+        photoOriginal = photoOriginal || photoData;
+        photoData = `data:${out.mimeType || out.mime_type || 'image/png'};base64,${out.data}`;
+        hideOverlay = true;
+        el.btnAiUndo.hidden = false;
+        el.aiStatus.textContent = 'Готово! Причёска перерисована нейросетью.';
+        update();
+    } catch (err) {
+        el.aiStatus.textContent = err instanceof TypeError
+            ? 'Сетевой запрос заблокирован на этой странице. Откройте приложение из репозитория (index.html) — там ИИ-режим работает.'
+            : 'Ошибка: ' + err.message;
+    } finally {
+        el.btnAi.disabled = false;
+    }
+});
+
+el.btnAiUndo.addEventListener('click', () => {
+    if (!photoOriginal) return;
+    photoData = photoOriginal;
+    photoOriginal = null;
+    hideOverlay = false;
+    el.btnAiUndo.hidden = true;
+    el.aiStatus.textContent = '';
+    update();
+});
 
 // Скачать результат как PNG
 el.btnDownload.addEventListener('click', () => {

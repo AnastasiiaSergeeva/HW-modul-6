@@ -72,6 +72,19 @@
                         <button id="btn-autofit" class="btn" type="button">🪄 Авто-подгонка</button>
                         <button id="btn-download" class="btn" type="button">⬇️ Скачать PNG</button>
                     </div>
+                    <div id="analysis" class="analysis" hidden></div>
+                    <details class="ai-box">
+                        <summary>✨ ИИ-фотореализм (экспериментально)</summary>
+                        <p class="photo-hint">Нейросеть Google Gemini перерисует причёску прямо на вашем фото —
+                            максимально реалистично. Нужен бесплатный API-ключ с
+                            aistudio.google.com. Внимание: в этом режиме фото отправляется в Google.</p>
+                        <input type="password" id="ai-key" placeholder="API-ключ Google AI Studio" autocomplete="off">
+                        <div class="fit-buttons">
+                            <button id="btn-ai" class="btn" type="button">✨ Сгенерировать</button>
+                            <button id="btn-ai-undo" class="btn" type="button" hidden>↩ Вернуть оригинал</button>
+                        </div>
+                        <p id="ai-status" class="photo-hint"></p>
+                    </details>
                 </div>
             </div>
 
